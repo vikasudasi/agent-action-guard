@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Comprehensive pytest suite: schema, rules (including allowlist and scoped `rm -rf /tmp/build`), classifier merge, audit JSONL/markdown, FastAPI TestClient server tests, bench harness, and CLI (Typer CliRunner).
-- `httpx` dev dependency for offline `TestClient` server tests.
-- CI workflow steps for `ruff format --check` and `serve` extra install for FastAPI tests.
+- Production integration layer: `agent-action-guard hooks install --target claude-code|cursor|kiro` writes harness hook configs and a per-target adapter script (`hooks/`) with local + `AGENT_ACTION_GUARD_URL` POST `/check` modes.
+- `guard/adapters.py` maps Claude Code / Cursor / Kiro pre-tool-use hook payloads onto the canonical `Action` schema; adapters emit harness-native deny signals (Claude Code/Cursor expressive deny JSON, Kiro exit 2) and fail open on errors.
+- Adapter integration section in README with a worked Claude Code example (Cursor reuses the same shape).
+- `tests/test_adapters.py` (hook-payload → Action mapping) and `tests/test_hooks_cli.py` (CLI + per-target end-to-end adapter smokes).
 
 ### Changed
 
+- Comprehensive pytest suite: schema, rules (including allowlist and scoped `rm -rf /tmp/build`), classifier merge, audit JSONL/markdown, FastAPI TestClient server tests, bench harness, and CLI (Typer CliRunner).
+- `httpx` dev dependency for offline `TestClient` server tests.
+- CI workflow steps for `ruff format --check` and `serve` extra install for FastAPI tests.
 - README updated for full `check` / `serve` / `audit` / `bench` workflows, HTTP API curl examples, and current rule/classifier behavior.
 - GitHub Actions CI installs `.[dev,serve]` and runs lint, format check, mypy, and pytest.
 

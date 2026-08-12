@@ -433,6 +433,76 @@ Render reports with `agent-action-guard audit --log guard.jsonl`.
 5. **Allowlist** — YAML overrides downgrade matched rules/commands one severity level.
 6. **Emit** — CLI table, HTTP JSON, JSONL audit line, or SSE event depending on entry point.
 
+## Harness Integration (pre-tool-use hooks)
+
+`agent-action-guard` ships a production integration layer that installs the
+guard as a **pre-tool-use hook** in real agent harnesses — the action is
+screened before it executes. The hook reads the harness's hook payload on
+stdin, normalises it into the canonical [`Action`](guard/schema.py) schema
+(via `guard/adapters.py`), evaluates it, and emits the harness-native deny
+signal when the action is blocked.
+
+```bash
+# Claude Code  -> writes .claude/settings.json + hooks/agent-action-guard-claude-code.py
+agent-action-guard hooks install --target claude-code --dir /path/to/project
+
+# Cursor       -> writes hooks.json + hooks/agent-action-guard-cursor.py
+agent-action-guard hooks install --target cursor --dir /path/to/project
+
+# Kiro         -> writes .kiro/hooks/guard.json + hooks/agent-action-guard-kiro.py
+agent-action-guard hooks install --target kiro --dir /path/to/project
+```
+
+Each install writes a thin per-target adapter script into `hooks/` under the
+target directory and wires the harness config file to run it on every tool
+call. The same scripts are committed at the repo root under [`hooks/`](hooks/).
+
+### Local vs. network mode
+
+By default the adapter resolves the verdict **locally** (imports `guard` and
+calls the rule engine directly). To evaluate against a running
+`agent-action-guard serve` endpoint instead, set:
+
+```bash
+export AGENT_ACTION_GUARD_URL=http://127.0.0.1:9099
+```
+
+When set, the adapter `POST`s the serialised `Action` JSON to
+`<url>/check` and uses the returned `verdict` / `reason`. Local mode is the
+default and requires no server.
+
+### Deny signals
+
+| Harness      | Block behavior                                                        |
+| ------------ | --------------------------------------------------------------------- |
+| Claude Code  | prints `hookSpecificOutput` JSON (deny) and exits `0`                 |
+| Cursor       | prints the same expressive deny JSON and exits `0`                    |
+| Kiro         | writes the reason to stderr and exits `2`                             |
+| Allow / warn | exit `0`, no decision JSON                                            |
+
+The adapters fail-open: if the guard itself errors (bad payload, network
+timeout, import issue) the hook exits `0` rather than breaking your agent.
+
+### Worked example (Claude Code; Cursor reuses the same shape)
+
+Install into a project, then feed the adapter a hook payload. For a dangerous
+`Bash` call the hook returns:
+
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/repo"}' \
+  | hooks/agent-action-guard-claude-code.py
+```
+
+```json
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Recursive force delete: Avoid `rm -rf`; use safer deletion tools or scoped paths with confirmation."}}
+```
+
+A benign call (`echo hi`) prints nothing and exits `0`.
+
+> **Hermes:** we integrate Hermes Agent (hermes-agent) separately from these
+> harness hooks — see the Hermes plugin/guard wiring rather than these
+> per-harness hooks for that runtime.
+
 ## Use Cases
 
 ### Pre-flight check in a shell hook
