@@ -17,10 +17,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install package
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,serve]"
 
-      - name: Ruff
+      - name: Ruff check
         run: ruff check .
+
+      - name: Ruff format
+        run: ruff format --check .
 
       - name: Mypy
         run: mypy guard cli
