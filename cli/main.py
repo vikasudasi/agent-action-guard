@@ -41,11 +41,23 @@ def check(
         Path | None,
         typer.Option("--allowlist", help="YAML allowlist path for rule/command overrides."),
     ] = None,
+    no_classifier: Annotated[
+        bool,
+        typer.Option(
+            "--no-classifier",
+            help="Skip classifier merge; use fixed rule confidences only (fully deterministic).",
+        ),
+    ] = False,
 ) -> None:
     """Evaluate a proposed action and print a structured verdict."""
     payload = json.loads(action)
     parsed = Action.model_validate(payload)
-    decision = guard.evaluate_with_allowlist(parsed, allowlist)
+    allowlist_path = str(allowlist) if allowlist is not None else None
+    decision = guard.evaluate_with_allowlist(
+        parsed,
+        allowlist_path,
+        use_classifier=not no_classifier,
+    )
     _print_decision(decision)
 
 
