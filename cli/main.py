@@ -64,9 +64,25 @@ def check(
 @app.command()
 def serve(
     port: Annotated[int, typer.Option("--port", help="HTTP port for the guard server.")] = 9099,
+    log: Annotated[
+        Path,
+        typer.Option("--log", help="Path to the JSONL audit log."),
+    ] = Path("guard.jsonl"),
 ) -> None:
     """Start the FastAPI guard server (SSE + /check endpoint)."""
-    raise NotImplementedError("serve implemented in Task 3")
+    try:
+        import uvicorn
+
+        from guard.audit import AuditLog
+        from guard.server import create_app
+    except ImportError as exc:
+        raise typer.BadParameter(
+            "serve dependencies are required. Install with: pip install -e '.[serve]'"
+        ) from exc
+
+    audit_log = AuditLog(log)
+    api = create_app(audit_log=audit_log)
+    uvicorn.run(api, host="127.0.0.1", port=port, log_level="info")
 
 
 @app.command()
@@ -77,7 +93,9 @@ def audit(
     ] = Path("guard.jsonl"),
 ) -> None:
     """Render a markdown summary report from an audit log."""
-    raise NotImplementedError
+    from guard.audit import render_markdown
+
+    typer.echo(render_markdown(log), nl=False)
 
 
 @app.command()

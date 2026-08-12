@@ -17,8 +17,9 @@ Use this skill when wiring agent loops, CI gates, or HTTP middleware that must i
 | `agent-action-guard check --action '<json>'` | Evaluate one action; print Rich verdict table |
 | `agent-action-guard check --action '<json>' --allowlist path.yaml` | Evaluate with YAML allowlist downgrades |
 | `agent-action-guard check --action '<json>' --no-classifier` | Rules only; fixed confidences (fully deterministic) |
-| `agent-action-guard serve --port 9099` | FastAPI + SSE server (Task 3 stub) |
-| `agent-action-guard audit --log guard.jsonl` | Markdown report from audit log (Task 3 stub) |
+| `agent-action-guard serve --port 9099` | FastAPI + SSE server on `127.0.0.1` |
+| `agent-action-guard serve --port 9099 --log guard.jsonl` | Serve with JSONL audit log path |
+| `agent-action-guard audit --log guard.jsonl` | Markdown report from audit log to stdout |
 | `agent-action-guard bench` | Dataset bench metrics (Task 4 stub) |
 | `agent-action-guard version` | Print package version |
 | `agent-action-guard --help` | List all subcommands |
@@ -176,10 +177,73 @@ Each rule includes severity (`block` or `warn`) and a remediation note in the de
 
 `guard.evaluate()` and `guard.evaluate_with_allowlist()` use the classifier by default.
 
+## Serve endpoint & audit (Task 3)
+
+Install the serve extra first:
+
+```bash
+pip install -e ".[serve]"
+```
+
+### Start the server
+
+```bash
+agent-action-guard serve --port 9099 --log guard.jsonl
+```
+
+Runs uvicorn on `127.0.0.1:9099` with JSONL audit logging.
+
+### HTTP API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/check` | Body: Action JSON → `{verdict, reason, confidence, action_hash}` |
+| `GET` | `/events` | SSE `text/event-stream` of verdicts as `/check` runs |
+| `GET` | `/health` | `{"status":"ok"}` liveness |
+
+Malformed `/check` bodies return HTTP 400 (pydantic validation).
+
+Example:
+
+```bash
+curl -s -X POST http://127.0.0.1:9099/check \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"shell","command":"echo hi"}'
+```
+
+```json
+{"verdict":"allow","reason":"no rules matched","confidence":0.95,"action_hash":"<sha256-hex>"}
+```
+
+Stream verdicts:
+
+```bash
+curl -N http://127.0.0.1:9099/events
+```
+
+### Audit log & report
+
+Each `/check` appends one JSONL line with: `timestamp` (ISO UTC), `action_hash`, `verdict`, `reason`, `confidence`, `rule_id`, and an `action` snapshot.
+
+Render a markdown summary (verdict counts, per-rule hits, recent decisions):
+
+```bash
+agent-action-guard audit --log guard.jsonl
+```
+
+### Python API
+
+```python
+from guard.audit import AuditLog, render_markdown
+from guard.server import create_app
+
+audit = AuditLog("guard.jsonl")
+app = create_app(audit_log=audit)
+report = render_markdown("guard.jsonl")
+```
+
 ## Stubs (not yet implemented)
 
-- `serve` → `NotImplementedError: serve implemented in Task 3`
-- `audit` → `NotImplementedError`
 - `bench` → `NotImplementedError`
 
 ## Project layout
@@ -188,5 +252,7 @@ Each rule includes severity (`block` or `warn`) and a remediation note in the de
 - `guard/decision.py` — `Decision`, `Verdict`
 - `guard/rules.py` — deterministic rule registry and evaluation
 - `guard/classifier.py` — heuristic scorer + rule/classifier merger
+- `guard/audit.py` — JSONL writer + markdown report
+- `guard/server.py` — FastAPI `/check`, `/events` SSE, `/health`
 - `guard/__init__.py` — `evaluate()` facade, `__version__`
 - `cli/main.py` — Typer CLI entry (`agent-action-guard` console script)
