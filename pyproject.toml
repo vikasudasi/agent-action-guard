@@ -42,7 +42,7 @@ all = [
 agent-action-guard = "cli.main:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["guard", "cli"]
+packages = ["guard", "cli", "eval"]
 
 [tool.ruff]
 line-length = 100
@@ -56,7 +56,7 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
-packages = ["guard", "cli"]
+packages = ["guard", "cli", "eval"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

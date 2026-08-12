@@ -305,7 +305,8 @@ def _matches_mcp_dangerous(action: Action) -> tuple[bool, RuleSeverity]:
 def _matches_chmod_system(action: Action) -> bool:
     text = _shell_text(action) if action.type == "shell" else ""
     path = _file_path(action)
-    blob = f"{text} {path}".lower()
+    args_text = " ".join(action.args) if action.type == "file" else ""
+    blob = f"{text} {path} {args_text}".lower()
     if not re.search(r"\b(chmod|chown)\b", blob):
         return False
     return _path_contains(path or text, SYSTEM_DIR_MARKERS)

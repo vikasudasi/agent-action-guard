@@ -20,7 +20,9 @@ Use this skill when wiring agent loops, CI gates, or HTTP middleware that must i
 | `agent-action-guard serve --port 9099` | FastAPI + SSE server on `127.0.0.1` |
 | `agent-action-guard serve --port 9099 --log guard.jsonl` | Serve with JSONL audit log path |
 | `agent-action-guard audit --log guard.jsonl` | Markdown report from audit log to stdout |
-| `agent-action-guard bench` | Dataset bench metrics (Task 4 stub) |
+| `agent-action-guard bench` | Run labeled dataset bench; write `bench_report.json` + markdown table |
+| `agent-action-guard bench --no-classifier` | Bench with rules-only evaluation (deterministic) |
+| `agent-action-guard bench --output report.json` | Custom JSON report path |
 | `agent-action-guard version` | Print package version |
 | `agent-action-guard --help` | List all subcommands |
 
@@ -109,6 +111,18 @@ agent-action-guard check --action '{"type":"network","url":"https://api.example.
 
 ```bash
 agent-action-guard check --action '{"type":"mcp","tool":"read_file","tool_args":{"path":"README.md"}}'
+```
+
+### Bench harness
+
+```bash
+agent-action-guard bench
+```
+
+Runs the curated labeled dataset (`eval/dataset.py`: 40+ dangerous, 40+ benign) through `guard.evaluate()`, computes precision/recall/F1, dangerous block-rate (block+warn = blocked), benign false-positive rate, and per-action-type and per-category breakdowns. Writes `bench_report.json` and prints a markdown table to stdout. Exits with code 1 if dangerous block-rate is below 80%.
+
+```bash
+agent-action-guard bench --no-classifier --output /tmp/bench_report.json
 ```
 
 ### Development verify
@@ -242,9 +256,21 @@ app = create_app(audit_log=audit)
 report = render_markdown("guard.jsonl")
 ```
 
-## Stubs (not yet implemented)
+## Eval dataset & bench (Task 4)
 
-- `bench` → `NotImplementedError`
+- `eval/dataset.py` — `DATASET`: labeled dangerous/benign actions covering every rule category
+- `guard/bench.py` — `run_bench()`, `format_markdown_table()`, `write_report()`
+
+```python
+from eval.dataset import DATASET
+from guard.bench import run_bench, format_markdown_table, write_report
+
+report = run_bench(DATASET)
+write_report(report, "bench_report.json")
+print(format_markdown_table(report))
+```
+
+Dangerous samples exercise all 19 rule IDs; benign samples are realistic agent actions (shell, file, network GET, git, MCP reads, PyPI installs).
 
 ## Project layout
 
@@ -254,5 +280,7 @@ report = render_markdown("guard.jsonl")
 - `guard/classifier.py` — heuristic scorer + rule/classifier merger
 - `guard/audit.py` — JSONL writer + markdown report
 - `guard/server.py` — FastAPI `/check`, `/events` SSE, `/health`
+- `eval/dataset.py` — labeled bench dataset (`DATASET`)
+- `guard/bench.py` — bench metrics and report formatting
 - `guard/__init__.py` — `evaluate()` facade, `__version__`
 - `cli/main.py` — Typer CLI entry (`agent-action-guard` console script)

@@ -99,9 +99,28 @@ def audit(
 
 
 @app.command()
-def bench() -> None:
+def bench(
+    output: Annotated[
+        Path,
+        typer.Option("--output", help="Path for the JSON bench report."),
+    ] = Path("bench_report.json"),
+    no_classifier: Annotated[
+        bool,
+        typer.Option(
+            "--no-classifier",
+            help="Evaluate with rules only (fixed confidences).",
+        ),
+    ] = False,
+) -> None:
     """Run the labeled dataset bench harness and print metrics."""
-    raise NotImplementedError
+    from eval.dataset import DATASET
+    from guard.bench import format_markdown_table, run_bench, write_report
+
+    report = run_bench(DATASET, use_classifier=not no_classifier)
+    write_report(report, output)
+    typer.echo(format_markdown_table(report))
+    if not report["meets_target"]:
+        raise typer.Exit(code=1)
 
 
 @app.command()
