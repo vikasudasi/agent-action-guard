@@ -82,6 +82,14 @@ MCP_DANGEROUS_TOOL_PATTERNS: tuple[tuple[str, RuleSeverity], ...] = (
     (r"(write|edit|patch)_file", "warn"),
 )
 
+PERSISTENCE_PATH_MARKERS: tuple[str, ...] = (
+    "/etc/sudoers",
+    "/etc/sudoers.d/",
+    "/etc/crontab",
+    "/etc/cron.d/",
+    "/etc/rc.local",
+)
+
 BLOCK_CONFIDENCE = 0.95
 WARN_CONFIDENCE = 0.75
 ALLOW_CONFIDENCE = 0.5
@@ -373,6 +381,203 @@ def _matches_pip_untrusted(text: str) -> bool:
     return any(marker in lowered for marker in untrusted_markers)
 
 
+def _matches_encoding_exec(text: str) -> bool:
+    lowered = text.lower()
+    decode_patterns = (
+        r"\bbase64\s+(-d|--decode|-D)\b",
+        r"\|\s*base64\s+(-d|--decode|-D)\b",
+        r"\bxxd\s+-r\b",
+        r"\bopenssl\s+enc\b[^|]*\s-d\b",
+        r"\buudecode\b",
+    )
+    pipe_to_shell = bool(re.search(r"\|\s*(ba)?sh\b", lowered))
+    if pipe_to_shell and any(re.search(pattern, lowered) for pattern in decode_patterns):
+        return True
+    if re.search(r"\bpython\d*\s+-c\b", text, re.IGNORECASE):
+        if re.search(r"\b(base64|b64decode)\b", lowered) and re.search(r"\b(eval|exec)\b", lowered):
+            return True
+    return False
+
+
+def _matches_reverse_shell(text: str) -> bool:
+    lowered = text.lower()
+    patterns = (
+        r"bash\s+-i[^|]*(/dev/tcp/|tcp:)",
+        r">\s*&\s*/dev/tcp/",
+        r"\b(nc|netcat|ncat)\s+[^\s|;&]+(\s+[^\s|;&]+)?\s+-e\s+",
+        r"\b(nc|netcat|ncat)\s+-e\s+",
+        r"\bsocat\b[^|]*exec:/bin/(ba)?sh",
+        r"\bsocat\b[^|]*tcp-listen[^|]*,exec:",
+    )
+    return any(re.search(pattern, lowered) for pattern in patterns)
+
+
+def _matches_shell_network_data_exfil(text: str) -> bool:
+    lowered = text.lower()
+    if re.search(r"\b(curl|wget)\b", lowered):
+        if re.search(r"(-d|--data|--data-binary|--data-urlencode|--upload-file)\s+@", lowered):
+            if re.search(r"https?://", lowered):
+                return True
+    if re.search(r"\b(cat|head|tail)\b[^|]*\|\s*(nc|netcat|ncat)\s+\S+\s+\d+", lowered):
+        return True
+    if re.search(r"\b(nc|netcat|ncat)\s+\S+\s+\d+\s*<\s*\S+", lowered):
+        return True
+    if re.search(r"\bsocat\b", lowered) and re.search(r"\b(file:|stdin)", lowered):
+        if re.search(r"\btcp:", lowered):
+            return True
+    return False
+
+
+def _matches_network_data_exfil(action: Action) -> bool:
+    if action.type == "shell":
+        return _matches_shell_network_data_exfil(_shell_text(action))
+
+    if action.type == "network":
+        url = (action.url or "").lower()
+        body = str(action.tool_args or "").lower()
+        blob = f"{url} {body}"
+        if re.search(r"(-d|--data|--data-binary|--data-urlencode|--upload-file)\s+@", blob):
+            return bool(re.search(r"https?://", url))
+    return False
+
+
+def _matches_hardcoded_secrets(text: str) -> bool:
+    patterns = (
+        r"AKIA[0-9A-Z]{16}",
+        r"ASIA[0-9A-Z]{16}",
+        r"ghp_[A-Za-z0-9]{20,}",
+        r"xoxb-[0-9A-Za-z-]{10,}",
+        r"PGPASSWORD\s*=\s*\S+",
+        r"MYSQL_PWD\s*=\s*\S+",
+        r"--password[=\s]\S+",
+        r"(?<![:/])\bpassword\s*[:=]\s*\S+",
+        r"api_key\s*=\s*AKIA",
+    )
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
+def _matches_container_privileged(text: str) -> bool:
+    lowered = text.lower()
+    if re.search(r"\bdocker\s+(run|create)\b", lowered):
+        if re.search(r"--privileged\b|--pid=host\b|--cap-add=\s*sys_admin\b", lowered):
+            return True
+        if re.search(
+            r"(-v|--volume)\s+(/:/host|/etc:/etc|/:/\w+|/var/run/docker\.sock)",
+            lowered,
+        ):
+            return True
+    if re.search(r"\bdocker\s+exec\b", lowered) and re.search(r"(-u|--user)\s+root\b", lowered):
+        return True
+    if re.search(r"\bkubectl\s+delete\b", lowered) and re.search(r"--all\b", lowered):
+        return True
+    if re.search(r"\bkubectl\s+drain\b", lowered):
+        return True
+    if re.search(r"\bhelm\s+delete\b", lowered) and re.search(r"--purge\b", lowered):
+        return True
+    return False
+
+
+def _matches_persistence_escalation(action: Action) -> bool:
+    text = _shell_text(action) if action.type == "shell" else ""
+    path = _file_path(action)
+    lowered = text.lower()
+
+    if re.search(r"\busermod\b[^;&|]*-aG\s+sudo\b", lowered):
+        return True
+
+    if re.search(r"\bchmod\b", lowered) and re.search(r"(\+s\b|u\+s|4755|g\+s)", lowered):
+        target = f"{path} {text}".lower()
+        if _path_contains(target, ("/bin/", "/usr/bin/", "/sbin/", "sudo", "passwd")):
+            return True
+
+    if re.search(
+        r"(\btee\b|\becho\b|\bcat\b)[^>]*>>?\s*[^\s|;&]*"
+        r"(/etc/sudoers(?:\.d)?|/etc/crontab|/etc/cron\.d)",
+        lowered,
+    ):
+        return True
+
+    if re.search(r">>?\s*[^\s|;&]*authorized_keys", lowered):
+        if re.search(r"(ssh-rsa|ssh-ed25519|ecdsa-sha2)", lowered):
+            return True
+
+    if action.type == "file":
+        op = _file_op(action)
+        if op in {"write", "create", "append"} and _path_contains(path, PERSISTENCE_PATH_MARKERS):
+            return True
+
+    rc_pattern = r"(\.bashrc|\.profile|\.zshrc|/etc/rc\.local)"
+    if re.search(rf">>?\s*[^\s|;&]*{rc_pattern}", lowered):
+        if re.search(r"\b(curl|wget)\b.*\|\s*(ba)?sh\b", lowered):
+            return True
+
+    return False
+
+
+def _matches_disk_destructive(text: str) -> bool:
+    lowered = text.lower()
+    if re.search(r"\bdd\b", lowered) and re.search(
+        r"\bof=/dev/(sd|nvme|mapper|md|dm-|loop|vd)", lowered
+    ):
+        return True
+    if re.search(r"\bshred\b", lowered) and re.search(r"(/etc/|/usr/|/var/|/boot/)", lowered):
+        return True
+    if re.search(r"\bmkfs(\.\w+)?\b", lowered):
+        return True
+    if re.search(r"\bwipefs\b", lowered):
+        return True
+    if re.search(r"\b(parted|fdisk)\b", lowered) and re.search(
+        r"\b(rm|mklabel|mkpart|destroy)\b", lowered
+    ):
+        return True
+    return False
+
+
+def _matches_db_unguarded_mutation(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    if re.search(r"\bdrop\s+schema\b", normalized, re.IGNORECASE):
+        return True
+    if re.search(r"\bdelete\s+from\s+[\w.\"`]+\b", normalized, re.IGNORECASE):
+        if not re.search(r"\bwhere\b", normalized, re.IGNORECASE):
+            return True
+    if re.search(r"\bupdate\s+[\w.\"`]+\s+set\b", normalized, re.IGNORECASE):
+        if not re.search(r"\bwhere\b", normalized, re.IGNORECASE):
+            return True
+    return False
+
+
+def _is_chain_destructive_segment(segment: str) -> bool:
+    return (
+        _matches_rm_rf(segment)
+        or _matches_curl_pipe_shell(segment)
+        or _matches_reverse_shell(segment)
+        or _matches_disk_destructive(segment)
+        or _matches_encoding_exec(segment)
+        or _matches_db_unguarded_mutation(segment)
+        or bool(re.search(r"\bdrop\s+(table|database|schema)\b", segment, re.IGNORECASE))
+        or bool(
+            re.search(
+                r"\b(curl|wget)\b[^|]*\|\s*(python|node|ruby|perl|php)\b",
+                segment,
+                re.IGNORECASE,
+            )
+        )
+    )
+
+
+def _matches_destructive_chain(text: str) -> bool:
+    if not re.search(r"(?:&&|\|\||;)", text):
+        return False
+    segments = re.split(r"\s*(?:&&|\|\||;)\s*", text)
+    if len(segments) < 2:
+        return False
+    has_innocuous_prefix = any(
+        not _is_chain_destructive_segment(segment) for segment in segments[:-1]
+    )
+    has_destructive_suffix = any(_is_chain_destructive_segment(segment) for segment in segments[1:])
+    return has_innocuous_prefix and has_destructive_suffix
+
+
 def _match_shell_rm_rf(action: Action) -> bool:
     return action.type == "shell" and _matches_rm_rf(_shell_text(action))
 
@@ -460,6 +665,44 @@ def _match_network_webhook_post(action: Action) -> bool:
 
 def _match_shell_pip_untrusted(action: Action) -> bool:
     return action.type == "shell" and _matches_pip_untrusted(_shell_text(action))
+
+
+def _match_shell_encoding_exec(action: Action) -> bool:
+    return action.type == "shell" and _matches_encoding_exec(_shell_text(action))
+
+
+def _match_shell_reverse_shell(action: Action) -> bool:
+    return action.type == "shell" and _matches_reverse_shell(_shell_text(action))
+
+
+def _match_network_data_exfil(action: Action) -> bool:
+    return _matches_network_data_exfil(action)
+
+
+def _match_shell_hardcoded_secrets(action: Action) -> bool:
+    return action.type == "shell" and _matches_hardcoded_secrets(_shell_text(action))
+
+
+def _match_shell_container_privileged(action: Action) -> bool:
+    return action.type == "shell" and _matches_container_privileged(_shell_text(action))
+
+
+def _match_persistence_escalation(action: Action) -> bool:
+    return _matches_persistence_escalation(action)
+
+
+def _match_shell_disk_destructive(action: Action) -> bool:
+    return action.type == "shell" and _matches_disk_destructive(_shell_text(action))
+
+
+def _match_db_unguarded_mutation(action: Action) -> bool:
+    if action.type != "shell":
+        return False
+    return _matches_db_unguarded_mutation(_shell_text(action))
+
+
+def _match_shell_destructive_chain(action: Action) -> bool:
+    return action.type == "shell" and _matches_destructive_chain(_shell_text(action))
 
 
 RULES: list[Rule] = [
@@ -595,6 +838,69 @@ RULES: list[Rule] = [
         severity="warn",
         remediation="Install packages from pinned PyPI versions instead of git URLs or custom indexes.",  # noqa: E501
         matcher=_match_shell_pip_untrusted,
+    ),
+    Rule(
+        rule_id="shell-encoding-exec",
+        name="Encoded payload piped to shell",
+        severity="block",
+        remediation="Do not decode and execute opaque payloads; inspect scripts before running them.",  # noqa: E501
+        matcher=_match_shell_encoding_exec,
+    ),
+    Rule(
+        rule_id="shell-reverse-shell",
+        name="Reverse shell or remote control channel",
+        severity="block",
+        remediation="Do not open reverse shells; use approved remote access tooling with audit trails.",  # noqa: E501
+        matcher=_match_shell_reverse_shell,
+    ),
+    Rule(
+        rule_id="network-data-exfil",
+        name="File or output exfiltration via network tool",
+        severity="block",
+        remediation="Do not upload local files or command output to external hosts via curl/nc/socat.",  # noqa: E501
+        matcher=_match_network_data_exfil,
+    ),
+    Rule(
+        rule_id="shell-hardcoded-secrets",
+        name="Hardcoded credential in command",
+        severity="warn",
+        remediation="Use secret managers or environment variables instead of embedding credentials.",  # noqa: E501
+        matcher=_match_shell_hardcoded_secrets,
+    ),
+    Rule(
+        rule_id="shell-container-privileged",
+        name="Privileged container or destructive orchestration",
+        severity="block",
+        remediation="Avoid privileged Docker runs, host mounts, and broad kubectl/helm delete operations.",  # noqa: E501
+        matcher=_match_shell_container_privileged,
+    ),
+    Rule(
+        rule_id="shell-persistence-escalation",
+        name="Privilege escalation or persistence modification",
+        severity="block",
+        remediation="Do not modify sudoers, cron, authorized_keys, or startup files for persistence.",  # noqa: E501
+        matcher=_match_persistence_escalation,
+    ),
+    Rule(
+        rule_id="shell-disk-destructive",
+        name="Disk or filesystem destructive operation",
+        severity="block",
+        remediation="Avoid dd/mkfs/wipefs/shred on devices or system paths; require backups and approval.",  # noqa: E501
+        matcher=_match_shell_disk_destructive,
+    ),
+    Rule(
+        rule_id="db-unguarded-mutation",
+        name="Unguarded SQL mutation",
+        severity="warn",
+        remediation="Add WHERE clauses to DELETE/UPDATE and avoid DROP SCHEMA without scoped backups.",  # noqa: E501
+        matcher=_match_db_unguarded_mutation,
+    ),
+    Rule(
+        rule_id="shell-destructive-chain",
+        name="Destructive command hidden in chain",
+        severity="warn",
+        remediation="Split chained commands and review each segment before executing destructive steps.",  # noqa: E501
+        matcher=_match_shell_destructive_chain,
     ),
 ]
 
