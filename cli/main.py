@@ -39,15 +39,13 @@ def check(
     ],
     allowlist: Annotated[
         Path | None,
-        typer.Option("--allowlist", help="YAML allowlist path (unused until Task 2)."),
+        typer.Option("--allowlist", help="YAML allowlist path for rule/command overrides."),
     ] = None,
 ) -> None:
     """Evaluate a proposed action and print a structured verdict."""
-    if allowlist is not None:
-        pass  # allowlist wiring lands in Task 2
     payload = json.loads(action)
     parsed = Action.model_validate(payload)
-    decision = guard.evaluate(parsed)
+    decision = guard.evaluate_with_allowlist(parsed, allowlist)
     _print_decision(decision)
 
 
