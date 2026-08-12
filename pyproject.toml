@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-action-guard"
+version = "0.1.0"
+description = "Local, auditable action-safety guard for AI agent tool calls"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "agent-action-guard contributors" }]
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2",
+    "rich>=13",
+    "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+serve = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+all = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+agent-action-guard = "cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["guard", "cli"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+packages = ["guard", "cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
