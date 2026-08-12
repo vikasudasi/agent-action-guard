@@ -10,7 +10,7 @@ Local, auditable action-safety guard that screens AI agent tool calls and return
 
 AI coding agents increasingly run with auto-execution enabled: shell commands, file writes, network calls, git operations, and MCP tools can fire without a human in the loop. A mistaken or adversarial prompt can trigger credential exfiltration, destructive filesystem operations, or force-pushed git history in seconds.
 
-`agent-action-guard` sits in the path between "agent decided to act" and "action executes." It inspects a proposed action, applies 19 deterministic rules plus an offline heuristic classifier, and returns a verdict with a reason and confidence score. The design mirrors the trust layer behind Anthropic's Claude Code auto-mode classifier, which blocks a large share of dangerous queries compared to manual review.
+`agent-action-guard` sits in the path between "agent decided to act" and "action executes." It inspects a proposed action, applies 28 deterministic rules plus an offline heuristic classifier, and returns a verdict with a reason and confidence score. The design mirrors the trust layer behind Anthropic's Claude Code auto-mode classifier, which blocks a large share of dangerous queries compared to manual review.
 
 ## Quickstart
 
@@ -386,7 +386,7 @@ Render reports with `agent-action-guard audit --log guard.jsonl`.
 | Module                | What It Checks                                      | Example                                      |
 |-----------------------|-----------------------------------------------------|----------------------------------------------|
 | `guard/schema.py`     | Validates action shape (type, paths, URLs, MCP)     | Reject malformed JSON before evaluation      |
-| `guard/rules.py`      | 19 deterministic dangerous-action signatures        | `rm -rf /`, credential exfil domains         |
+| `guard/rules.py`      | 28 deterministic dangerous-action signatures        | `rm -rf /`, credential exfil domains         |
 | `guard/classifier.py` | Offline heuristic dangerousness score + merge       | Boosts block confidence on pipe-to-shell       |
 | `guard/decision.py`   | Verdict + reason + confidence dataclass             | `block` with `rule_id` and `action_hash`     |
 | `guard/audit.py`      | JSONL writer + markdown report                      | Append every `/check` result to `guard.jsonl`|
@@ -406,7 +406,7 @@ Render reports with `agent-action-guard audit --log guard.jsonl`.
             │
             ▼
   ┌────────────────────┐
-  │  Rule engine       │  ← guard/rules.py (19 rules)
+  │  Rule engine       │  ← guard/rules.py (28 rules)
   │  block > warn      │
   └─────────┬──────────┘
             │
@@ -581,7 +581,7 @@ agent-action-guard/
 │   ├── __init__.py          # evaluate() facade, __version__
 │   ├── schema.py            # pydantic Action model
 │   ├── decision.py          # Verdict + Decision
-│   ├── rules.py             # rule engine (19 rules)
+│   ├── rules.py             # rule engine (28 rules)
 │   ├── classifier.py        # scorer + merger
 │   ├── audit.py             # JSONL + markdown
 │   ├── bench.py             # bench metrics
